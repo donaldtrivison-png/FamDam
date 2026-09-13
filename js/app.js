@@ -1,19 +1,27 @@
 /**
- * FamDam app: state, rendering, and event wiring.
+ * FamDam app: state, rendering, scoring, and event wiring.
  * Persists to localStorage always; also syncs to Google Drive/Calendar
  * when the user has connected their Google account (see google.js).
  */
 (function () {
   const LS_STATE = "famdam.state.v1";
   const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const DAY_LETTERS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const TREND_DAYS = 14;
+  const RANGE_DAYS = { week: 7, month: 30, all: null };
 
-  const COLORS = ["#4f8cff", "#e0553f", "#2a9d5c", "#f2a90b", "#9b5de5", "#00b8a9"];
+  // Material-style five-point star, reused for pips, stat tiles and score rows.
+  const STAR_PATH = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+
+  const COLORS = ["#1fa39a", "#ff6b57", "#f5a623", "#6a8caf", "#9b6bd6", "#3fae6a"];
   let colorCycle = 0;
 
   /** @type {{familyMembers: Array, chores: Array, completions: Object}} */
-  let state = loadLocalState() || { familyMembers: [], chores: [], completions: {} };
+  let state = normalizeState(loadLocalState() || { familyMembers: [], chores: [], completions: {} });
   let weekStart = startOfWeek(new Date());
   let saveTimer = null;
+  let reportRange = "week";
+  let activePicker = null;
 
   // ---------- persistence ----------
 
@@ -24,6 +32,42 @@
     } catch {
       return null;
     }
+  }
+
+  /** Fills in defaults and migrates older data shapes so the rest of the app
+   *  can assume every chore has a createdAt and every completion records who
+   *  did it and when. */
+  function normalizeState(s) {
+    s.familyMembers = s.familyMembers || [];
+    s.chores = s.chores || [];
+    s.completions = s.completions || {};
+
+    const today = isoDate(new Date());
+    s.chores.forEach((c) => {
+      if (!c.createdAt) c.createdAt = today;
+      if (!Array.isArray(c.assigneeIds)) c.assigneeIds = [];
+      if (!c.googleEventIds) c.googleEventIds = [];
+    });
+
+    const choreById = Object.fromEntries(s.chores.map((c) => [c.id, c]));
+    Object.keys(s.completions).forEach((key) => {
+      const entry = s.completions[key];
+      if (entry === true) {
+        // Legacy shape: boolean-only completion, no attribution recorded.
+        const [choreId, dateIso] = key.split("::");
+        const chore = choreById[choreId];
+        const fallbackAssignee = chore && chore.assigneeIds[0];
+        s.completions[key] = {
+          done: true,
+          completedAt: `${dateIso}T00:00:00`,
+          completedBy: fallbackAssignee || null,
+        };
+      } else if (entry && typeof entry === "object" && entry.completedBy === undefined) {
+        entry.completedBy = null;
+      }
+    });
+
+    return s;
   }
 
   function saveLocalState() {
@@ -80,6 +124,38 @@
     return (chore.schedule.days || []).includes(dayIndex);
   }
 
+  // ---------- icons ----------
+
+  function starIcon(filled) {
+    if (filled) return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${STAR_PATH}" fill="currentColor"/></svg>`;
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${STAR_PATH}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+  }
+
+  function starRow(count, max = 5) {
+    let out = "";
+    for (let i = 0; i < max; i++) out += `<span>${starIcon(i < count)}</span>`;
+    return out;
+  }
+
+  function starsForPct(pct) {
+    if (pct === null) return 0;
+    return Math.min(5, Math.max(0, Math.round(pct / 20)));
+  }
+
+  function statusColor(pct) {
+    if (pct === null) return "var(--status-none)";
+    if (pct >= 80) return "var(--good)";
+    if (pct >= 50) return "var(--warning)";
+    return "var(--critical)";
+  }
+
+  function statusLabel(pct) {
+    if (pct === null) return "No data yet";
+    if (pct >= 80) return "On track";
+    if (pct >= 50) return "Needs attention";
+    return "Falling behind";
+  }
+
   // ---------- CRUD: members ----------
 
   function addMember(name, color) {
@@ -105,6 +181,7 @@
       title: title.trim(),
       assigneeIds,
       schedule: { type: scheduleType, days: scheduleType === "weekly" ? days : [], timesPerDay },
+      createdAt: isoDate(new Date()),
       googleEventIds: [],
     };
     state.chores.push(chore);
@@ -125,11 +202,85 @@
     }
   }
 
-  function toggleCompletion(choreId, dateIso, slot) {
+  // ---------- completions (who did it, and when) ----------
+
+  function setCompletion(choreId, dateIso, slot, memberId) {
     const key = `${choreId}::${dateIso}::${slot}`;
-    if (state.completions[key]) delete state.completions[key];
-    else state.completions[key] = true;
+    state.completions[key] = { done: true, completedAt: new Date().toISOString(), completedBy: memberId || null };
     persist();
+  }
+
+  function clearCompletion(choreId, dateIso, slot) {
+    const key = `${choreId}::${dateIso}::${slot}`;
+    delete state.completions[key];
+    persist();
+  }
+
+  function closeCompletionPicker() {
+    if (!activePicker) return;
+    activePicker.menu.remove();
+    document.removeEventListener("click", activePicker.onOutside, true);
+    document.removeEventListener("keydown", activePicker.onKey, true);
+    activePicker = null;
+  }
+
+  /** Opens a small "who did it?" menu anchored to the clicked pip. */
+  function openCompletionPicker(pipEl, chore, dateIso, slot, assignees) {
+    closeCompletionPicker();
+    const menu = document.createElement("div");
+    menu.className = "completion-picker";
+    menu.innerHTML =
+      `<div class="completion-picker-title">Who did it?</div>` +
+      assignees
+        .map(
+          (a) =>
+            `<button type="button" class="completion-picker-option" data-id="${a.id}">` +
+            `<span class="swatch" style="background:${a.color}"></span>${escapeHtml(a.name)}</button>`
+        )
+        .join("");
+    document.body.appendChild(menu);
+
+    const rect = pipEl.getBoundingClientRect();
+    const top = window.scrollY + rect.bottom + 6;
+    let left = window.scrollX + rect.left;
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
+    left = Math.min(left, Math.max(8, maxLeft));
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+
+    menu.querySelectorAll(".completion-picker-option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setCompletion(chore.id, dateIso, slot, btn.dataset.id);
+        closeCompletionPicker();
+      });
+    });
+
+    const onOutside = (e) => {
+      if (!menu.contains(e.target)) closeCompletionPicker();
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") closeCompletionPicker();
+    };
+    setTimeout(() => {
+      document.addEventListener("click", onOutside, true);
+      document.addEventListener("keydown", onKey, true);
+    }, 0);
+    activePicker = { menu, onOutside, onKey };
+  }
+
+  function handlePipClick(pipEl, chore, dateIso, slot) {
+    const key = `${chore.id}::${dateIso}::${slot}`;
+    const entry = state.completions[key];
+    if (entry && entry.done) {
+      clearCompletion(chore.id, dateIso, slot);
+      return;
+    }
+    const assignees = state.familyMembers.filter((m) => chore.assigneeIds.includes(m.id));
+    if (assignees.length > 1) {
+      openCompletionPicker(pipEl, chore, dateIso, slot, assignees);
+    } else {
+      setCompletion(chore.id, dateIso, slot, assignees[0] ? assignees[0].id : null);
+    }
   }
 
   async function syncOneChore(chore) {
@@ -150,6 +301,58 @@
     for (const chore of state.chores) {
       await syncOneChore(chore);
     }
+  }
+
+  // ---------- scoring: turn schedules + completions into a report ----------
+
+  /**
+   * Walks every chore's schedule from its creation date through today and
+   * classifies each due occurrence as onTime / late / missed / pending.
+   * `rangeDays` limits how far back to look (null = since each chore began).
+   */
+  function occurrencesInRange(rangeDays) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayIso = isoDate(today);
+    const rangeStart = rangeDays ? addDays(today, -(rangeDays - 1)) : null;
+    const results = [];
+
+    state.chores.forEach((chore) => {
+      const createdAt = new Date(`${chore.createdAt}T00:00:00`);
+      let cursor = rangeStart && rangeStart > createdAt ? new Date(rangeStart) : createdAt;
+      cursor.setHours(0, 0, 0, 0);
+
+      while (cursor <= today) {
+        const dateIso = isoDate(cursor);
+        if (choreRunsOn(chore, cursor.getDay())) {
+          const times = Math.max(1, chore.schedule.timesPerDay || 1);
+          for (let slot = 0; slot < times; slot++) {
+            const key = `${chore.id}::${dateIso}::${slot}`;
+            const entry = state.completions[key];
+            let status;
+            let completedBy = null;
+            if (entry && entry.done) {
+              completedBy = entry.completedBy || null;
+              status = (entry.completedAt || "").slice(0, 10) > dateIso ? "late" : "onTime";
+            } else {
+              status = dateIso < todayIso ? "missed" : "pending";
+            }
+            results.push({ choreId: chore.id, assigneeIds: chore.assigneeIds, date: dateIso, status, completedBy });
+          }
+        }
+        cursor = addDays(cursor, 1);
+      }
+    });
+
+    return results;
+  }
+
+  function summarize(occurrences) {
+    const c = { onTime: 0, late: 0, missed: 0, pending: 0 };
+    occurrences.forEach((o) => c[o.status]++);
+    const scored = c.onTime + c.late + c.missed;
+    const pct = scored ? Math.round((c.onTime / scored) * 100) : null;
+    return { ...c, scored, pct };
   }
 
   // ---------- rendering ----------
@@ -234,6 +437,7 @@
     const emptyState = document.getElementById("emptyState");
     const table = document.getElementById("chartTable");
     const today = new Date();
+    const todayIso = isoDate(today);
 
     const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
     document.getElementById("weekLabel").textContent =
@@ -256,21 +460,42 @@
       "</tr>";
 
     tbody.innerHTML = "";
+    const pipHandlers = [];
+
     state.chores.forEach((chore) => {
       const tr = document.createElement("tr");
       let cells = `<td class="chore-name-cell">${escapeHtml(chore.title)}</td>`;
+      const assignees = state.familyMembers.filter((m) => chore.assigneeIds.includes(m.id));
+
       weekDates.forEach((d) => {
         const dayIndex = d.getDay();
-        if (!choreRunsOn(chore, dayIndex)) {
+        if (!choreRunsOn(chore, dayIndex) || isoDate(d) < chore.createdAt) {
           cells += `<td class="${isSameDay(d, today) ? "today-col" : ""} day-cell-empty">—</td>`;
           return;
         }
-        const assignees = state.familyMembers.filter((m) => chore.assigneeIds.includes(m.id));
         const dateIso = isoDate(d);
         const times = Math.max(1, chore.schedule.timesPerDay || 1);
         const pips = Array.from({ length: times }, (_, slot) => {
-          const done = !!state.completions[`${chore.id}::${dateIso}::${slot}`];
-          return `<button class="pip ${done ? "done" : ""}" data-chore="${chore.id}" data-date="${dateIso}" data-slot="${slot}" title="Mark ${slot + 1}/${times}">${done ? "✓" : ""}</button>`;
+          const key = `${chore.id}::${dateIso}::${slot}`;
+          const entry = state.completions[key];
+          const done = !!(entry && entry.done);
+          let cls = "pip";
+          let style = "";
+          let title;
+          if (done) {
+            cls += " pip-done";
+            const doer = state.familyMembers.find((m) => m.id === entry.completedBy);
+            const late = (entry.completedAt || "").slice(0, 10) > dateIso;
+            style = doer ? ` style="--pip-color:${doer.color}"` : "";
+            title = doer ? `Done by ${doer.name}${late ? " (logged late)" : ""}` : `Done${late ? " (logged late)" : ""}`;
+          } else if (dateIso < todayIso) {
+            cls += " pip-missed";
+            title = "Missed — tap to log it late";
+          } else {
+            title = times > 1 ? `Mark ${slot + 1}/${times} done` : "Mark done";
+          }
+          pipHandlers.push({ choreId: chore.id, dateIso, slot });
+          return `<button type="button" class="${cls}"${style} data-chore="${chore.id}" data-date="${dateIso}" data-slot="${slot}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${starIcon(done)}</button>`;
         }).join("");
         const assigneeLine = assignees.length
           ? `<span class="assignee-line">${assignees
@@ -285,9 +510,126 @@
 
     tbody.querySelectorAll(".pip").forEach((btn) => {
       btn.addEventListener("click", () => {
-        toggleCompletion(btn.dataset.chore, btn.dataset.date, Number(btn.dataset.slot));
+        const chore = state.chores.find((c) => c.id === btn.dataset.chore);
+        if (chore) handlePipClick(btn, chore, btn.dataset.date, Number(btn.dataset.slot));
       });
     });
+  }
+
+  function renderScoreTile(el, label, summary) {
+    if (summary.pct === null) {
+      el.innerHTML = `
+        <span class="score-label">${escapeHtml(label)}</span>
+        <span class="score-empty">No tasks due yet in this range.</span>
+      `;
+      return;
+    }
+    const color = statusColor(summary.pct);
+    el.innerHTML = `
+      <span class="score-label">${escapeHtml(label)}</span>
+      <span class="score-value">${summary.pct}<span class="score-unit">%</span></span>
+      <span class="score-stars">${starRow(starsForPct(summary.pct))}</span>
+      <span class="status-chip"><i class="status-dot" style="background:${color}"></i>${statusLabel(summary.pct)}</span>
+      <span class="score-detail">${summary.onTime} on time · ${summary.late} late · ${summary.missed} missed</span>
+    `;
+  }
+
+  function renderMemberScoreRow(member, summary) {
+    const li = document.createElement("li");
+    if (summary.pct === null) {
+      li.className = "member-score-row no-data";
+      li.innerHTML = `
+        <span class="swatch" style="background:${member.color}"></span>
+        <span class="member-score-name">${escapeHtml(member.name)}</span>
+        <span class="chore-meta">No tasks due yet</span>
+      `;
+      return li;
+    }
+    const color = statusColor(summary.pct);
+    li.className = "member-score-row";
+    li.title = statusLabel(summary.pct);
+    li.innerHTML = `
+      <span class="swatch" style="background:${member.color}"></span>
+      <span class="member-score-name">${escapeHtml(member.name)}</span>
+      <span class="member-score-bar-track"><span class="member-score-bar-fill" style="width:${summary.pct}%;background:${color}"></span></span>
+      <span class="member-score-pct">${summary.pct}%</span>
+      <span class="member-score-stars">${starRow(starsForPct(summary.pct))}</span>
+    `;
+    return li;
+  }
+
+  function renderTrend() {
+    const occ = occurrencesInRange(TREND_DAYS);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Array.from({ length: TREND_DAYS }, (_, i) => addDays(today, -(TREND_DAYS - 1) + i));
+
+    const chart = document.getElementById("trendChart");
+    chart.innerHTML = "";
+
+    days.forEach((d, i) => {
+      const dateIso = isoDate(d);
+      const dayOcc = occ.filter((o) => o.date === dateIso);
+      const s = summarize(dayOcc);
+      const isToday = i === days.length - 1;
+
+      const wrap = document.createElement("div");
+      wrap.className = "trend-bar-wrap";
+
+      const valueEl = document.createElement("div");
+      valueEl.className = "trend-bar-value";
+      valueEl.style.visibility = isToday ? "visible" : "hidden";
+      valueEl.textContent = s.pct === null ? "–" : `${s.pct}%`;
+
+      const bar = document.createElement("div");
+      bar.className = "trend-bar";
+      let color;
+      let heightPx;
+      if (s.pct === null) {
+        color = "var(--status-none)";
+        heightPx = 8;
+      } else {
+        color = statusColor(s.pct);
+        heightPx = Math.max(8, Math.round((s.pct / 100) * 80) + 8);
+      }
+      bar.style.background = color;
+      bar.style.height = `${heightPx}px`;
+      const dayLabel = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+      bar.title =
+        s.pct === null
+          ? `${dayLabel}: nothing due`
+          : `${dayLabel}: ${s.onTime}/${s.scored} on time (${s.pct}%)${s.late ? `, ${s.late} late` : ""}${s.missed ? `, ${s.missed} missed` : ""}`;
+
+      const dayLetter = document.createElement("div");
+      dayLetter.className = "trend-day-label";
+      dayLetter.textContent = DAY_LETTERS[d.getDay()];
+
+      wrap.appendChild(valueEl);
+      wrap.appendChild(bar);
+      wrap.appendChild(dayLetter);
+      chart.appendChild(wrap);
+    });
+  }
+
+  function renderReport() {
+    const occ = occurrencesInRange(RANGE_DAYS[reportRange]);
+    const overall = summarize(occ);
+    renderScoreTile(document.getElementById("familyScoreTile"), "Whole family", overall);
+
+    const memberList = document.getElementById("memberScoreList");
+    memberList.innerHTML = "";
+    if (!state.familyMembers.length) {
+      memberList.innerHTML = '<li class="chore-meta">Add family members to see individual scores.</li>';
+    }
+    state.familyMembers.forEach((m) => {
+      const mine = occ.filter(
+        (o) => (o.assigneeIds.includes(m.id) && o.status === "missed") || o.completedBy === m.id
+      );
+      const s = summarize(mine);
+      memberList.appendChild(renderMemberScoreRow(m, s));
+    });
+
+    renderTrend();
   }
 
   function escapeHtml(str) {
@@ -300,6 +642,7 @@
     renderMembers();
     renderChores();
     renderChart();
+    renderReport();
   }
 
   // ---------- event wiring ----------
@@ -346,6 +689,7 @@
       e.target.reset();
       dayPicker.hidden = true;
       document.getElementById("choreTimes").value = 1;
+      document.querySelector(".add-chore-details").open = false;
       renderAssigneeChips();
     });
   }
@@ -362,6 +706,20 @@
     document.getElementById("todayBtn").addEventListener("click", () => {
       weekStart = startOfWeek(new Date());
       renderChart();
+    });
+  }
+
+  function wireReportTabs() {
+    const tabs = document.querySelectorAll("#rangeTabs .range-tab");
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        reportRange = tab.dataset.range;
+        tabs.forEach((t) => {
+          t.classList.toggle("is-active", t === tab);
+          t.setAttribute("aria-selected", String(t === tab));
+        });
+        renderReport();
+      });
     });
   }
 
@@ -431,7 +789,7 @@
     try {
       const remote = await window.FamDamGoogle.loadRemoteState();
       if (remote) {
-        state = remote;
+        state = normalizeState(remote);
       } else {
         await window.FamDamGoogle.saveRemoteState(state);
       }
@@ -449,6 +807,7 @@
     wireMemberForm();
     wireChoreForm();
     wireWeekNav();
+    wireReportTabs();
     wireGoogle();
     document.getElementById("memberColor").value = COLORS[0];
     colorCycle = 1;

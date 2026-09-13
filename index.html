@@ -6,6 +6,9 @@
   <title>FamDam — Family Chore Chart</title>
   <meta name="description" content="A family chore and activity chart with Google Calendar sync." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧹</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito+Sans:wght@400;600;700;800&display=swap" />
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -13,10 +16,10 @@
   <div id="app">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-emoji">🧹</span>
+        <span class="brand-emoji" aria-hidden="true">🧹</span>
         <div>
           <h1>FamDam</h1>
-          <p class="tagline">Family chore &amp; activity chart</p>
+          <p class="tagline">Your family's chore &amp; activity chart</p>
         </div>
       </div>
       <div class="google-area">
@@ -27,74 +30,114 @@
     </header>
 
     <main class="layout">
-      <section class="panel members-panel">
-        <h2>Family Members</h2>
-        <ul id="memberList" class="member-list"></ul>
-        <form id="memberForm" class="inline-form">
-          <input type="text" id="memberName" placeholder="Add a family member…" maxlength="30" required />
-          <input type="color" id="memberColor" value="#4f8cff" title="Color" />
-          <button type="submit" class="btn btn-primary">Add</button>
-        </form>
-      </section>
+      <aside class="sidebar">
+        <section class="panel members-panel">
+          <h2>Who's on the Chart</h2>
+          <ul id="memberList" class="member-list"></ul>
+          <form id="memberForm" class="inline-form">
+            <input type="text" id="memberName" placeholder="Add a family member…" maxlength="30" required />
+            <input type="color" id="memberColor" value="#1FA39A" title="Color" />
+            <button type="submit" class="btn btn-primary">Add</button>
+          </form>
+        </section>
 
-      <section class="panel chores-panel">
-        <h2>Chores &amp; Activities</h2>
-        <ul id="choreList" class="chore-list"></ul>
+        <section class="panel chores-panel">
+          <h2>Chores &amp; Activities</h2>
+          <ul id="choreList" class="chore-list"></ul>
 
-        <form id="choreForm" class="chore-form">
-          <div class="form-row">
-            <input type="text" id="choreTitle" placeholder="Chore or activity name…" maxlength="60" required />
-          </div>
+          <details class="add-chore-details">
+            <summary class="add-chore-summary">+ Add a chore or activity</summary>
+            <form id="choreForm" class="chore-form">
+              <div class="form-row">
+                <input type="text" id="choreTitle" placeholder="Chore or activity name…" maxlength="60" required />
+              </div>
 
-          <div class="form-row">
-            <label class="field-label">Assign to</label>
-            <div id="choreAssignees" class="chip-group"></div>
-          </div>
+              <div class="form-row">
+                <label class="field-label">Assign to</label>
+                <div id="choreAssignees" class="chip-group"></div>
+              </div>
 
-          <div class="form-row">
-            <label class="field-label">Schedule</label>
-            <div class="schedule-toggle">
-              <label><input type="radio" name="scheduleType" value="daily" checked /> Every day</label>
-              <label><input type="radio" name="scheduleType" value="weekly" /> Specific days</label>
+              <div class="form-row">
+                <label class="field-label">Schedule</label>
+                <div class="schedule-toggle">
+                  <label><input type="radio" name="scheduleType" value="daily" checked /> Every day</label>
+                  <label><input type="radio" name="scheduleType" value="weekly" /> Specific days</label>
+                </div>
+                <div id="dayPicker" class="day-picker" hidden>
+                  <label><input type="checkbox" value="0" /> Sun</label>
+                  <label><input type="checkbox" value="1" /> Mon</label>
+                  <label><input type="checkbox" value="2" /> Tue</label>
+                  <label><input type="checkbox" value="3" /> Wed</label>
+                  <label><input type="checkbox" value="4" /> Thu</label>
+                  <label><input type="checkbox" value="5" /> Fri</label>
+                  <label><input type="checkbox" value="6" /> Sat</label>
+                </div>
+              </div>
+
+              <div class="form-row times-row">
+                <label class="field-label" for="choreTimes">Times per day</label>
+                <input type="number" id="choreTimes" min="1" max="10" value="1" />
+              </div>
+
+              <button type="submit" class="btn btn-primary">Add chore</button>
+            </form>
+          </details>
+        </section>
+      </aside>
+
+      <div class="spotlight">
+        <section class="panel chart-panel hero">
+          <div class="chart-header">
+            <div>
+              <h2>This Week's Chart</h2>
+              <p class="panel-subtitle">Tap a star to mark a task done — and say who did it.</p>
             </div>
-            <div id="dayPicker" class="day-picker" hidden>
-              <label><input type="checkbox" value="0" /> Sun</label>
-              <label><input type="checkbox" value="1" /> Mon</label>
-              <label><input type="checkbox" value="2" /> Tue</label>
-              <label><input type="checkbox" value="3" /> Wed</label>
-              <label><input type="checkbox" value="4" /> Thu</label>
-              <label><input type="checkbox" value="5" /> Fri</label>
-              <label><input type="checkbox" value="6" /> Sat</label>
+            <div class="week-nav">
+              <button id="prevWeek" class="btn btn-ghost" aria-label="Previous week">‹ Prev</button>
+              <span id="weekLabel" class="week-label"></span>
+              <button id="nextWeek" class="btn btn-ghost" aria-label="Next week">Next ›</button>
+              <button id="todayBtn" class="btn btn-ghost">Today</button>
+            </div>
+          </div>
+          <div class="chart-scroll">
+            <table id="chartTable" class="chart-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="emptyState" class="empty-state" hidden>Add family members and chores to see your chart here.</p>
+        </section>
+
+        <section class="panel report-panel">
+          <div class="report-header">
+            <div>
+              <h2>Scorecard</h2>
+              <p class="panel-subtitle">How on-time everyone's been.</p>
+            </div>
+            <div class="range-tabs" role="tablist" id="rangeTabs">
+              <button type="button" class="range-tab is-active" data-range="week" role="tab" aria-selected="true">This week</button>
+              <button type="button" class="range-tab" data-range="month" role="tab" aria-selected="false">Last 30 days</button>
+              <button type="button" class="range-tab" data-range="all" role="tab" aria-selected="false">All time</button>
             </div>
           </div>
 
-          <div class="form-row times-row">
-            <label class="field-label" for="choreTimes">Times per day</label>
-            <input type="number" id="choreTimes" min="1" max="10" value="1" />
+          <div class="score-grid">
+            <div id="familyScoreTile" class="score-tile family-score"></div>
+            <ul id="memberScoreList" class="member-score-list"></ul>
           </div>
 
-          <button type="submit" class="btn btn-primary">Add chore</button>
-        </form>
-      </section>
-
-      <section class="panel chart-panel">
-        <div class="chart-header">
-          <h2>Weekly Chart</h2>
-          <div class="week-nav">
-            <button id="prevWeek" class="btn btn-ghost">‹ Prev</button>
-            <span id="weekLabel" class="week-label"></span>
-            <button id="nextWeek" class="btn btn-ghost">Next ›</button>
-            <button id="todayBtn" class="btn btn-ghost">Today</button>
+          <div class="trend-block">
+            <h3>Last 14 days</h3>
+            <div id="trendChart" class="trend-chart" role="img" aria-label="Daily on-time completion trend for the last 14 days"></div>
+            <div class="trend-legend">
+              <span class="legend-item"><i class="legend-dot legend-good"></i>On time</span>
+              <span class="legend-item"><i class="legend-dot legend-warn"></i>Needs work</span>
+              <span class="legend-item"><i class="legend-dot legend-critical"></i>Missed</span>
+              <span class="legend-item"><i class="legend-dot legend-none"></i>Nothing due</span>
+            </div>
           </div>
-        </div>
-        <div class="chart-scroll">
-          <table id="chartTable" class="chart-table">
-            <thead></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <p id="emptyState" class="empty-state" hidden>Add family members and chores to see your chart here.</p>
-      </section>
+        </section>
+      </div>
     </main>
 
     <footer class="foot">

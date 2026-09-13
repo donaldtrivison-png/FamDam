@@ -6,7 +6,16 @@ A lightweight, no-backend web app for tracking family chores and activities:
 - Add/remove chores or activities, assign them to one or more family members,
   and schedule them **every day** or on **specific days of the week**, with a
   **number of times per day**.
-- A weekly chart showing what's due each day, with check-off boxes.
+- A big weekly chart — the centerpiece of the app — showing what's due each
+  day. Tap a star to mark a task done; if it's assigned to more than one
+  person, FamDam asks **who** actually did it, so credit (and scoring) is
+  accurate per family member.
+- A **Scorecard**: an on-time completion score (with a star rating) for the
+  whole family and for each person individually, over "This week," "Last 30
+  days," or "All time" — plus a 14-day trend chart so you can see whether
+  things are improving. A task counts as on-time only if it's checked off the
+  day it was due; anything checked off later counts as late, and anything
+  past due and still unchecked counts as missed.
 - Optional **Google account connection**: syncs your chores as recurring
   events on a dedicated "Family Chores" Google Calendar, and stores your
   FamDam data in your Google Drive app-data folder so it follows you across
