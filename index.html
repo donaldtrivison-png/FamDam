@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FamDam — Family Chore Chart</title>
+  <meta name="description" content="A family chore and activity chart with Google Calendar sync." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧹</text></svg>" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-emoji">🧹</span>
+        <div>
+          <h1>FamDam</h1>
+          <p class="tagline">Family chore &amp; activity chart</p>
+        </div>
+      </div>
+      <div class="google-area">
+        <span id="syncStatus" class="sync-status">Not connected</span>
+        <button id="googleBtn" class="btn btn-google">Connect Google</button>
+        <button id="settingsBtn" class="btn btn-ghost" title="Google API settings">⚙️</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel members-panel">
+        <h2>Family Members</h2>
+        <ul id="memberList" class="member-list"></ul>
+        <form id="memberForm" class="inline-form">
+          <input type="text" id="memberName" placeholder="Add a family member…" maxlength="30" required />
+          <input type="color" id="memberColor" value="#4f8cff" title="Color" />
+          <button type="submit" class="btn btn-primary">Add</button>
+        </form>
+      </section>
+
+      <section class="panel chores-panel">
+        <h2>Chores &amp; Activities</h2>
+        <ul id="choreList" class="chore-list"></ul>
+
+        <form id="choreForm" class="chore-form">
+          <div class="form-row">
+            <input type="text" id="choreTitle" placeholder="Chore or activity name…" maxlength="60" required />
+          </div>
+
+          <div class="form-row">
+            <label class="field-label">Assign to</label>
+            <div id="choreAssignees" class="chip-group"></div>
+          </div>
+
+          <div class="form-row">
+            <label class="field-label">Schedule</label>
+            <div class="schedule-toggle">
+              <label><input type="radio" name="scheduleType" value="daily" checked /> Every day</label>
+              <label><input type="radio" name="scheduleType" value="weekly" /> Specific days</label>
+            </div>
+            <div id="dayPicker" class="day-picker" hidden>
+              <label><input type="checkbox" value="0" /> Sun</label>
+              <label><input type="checkbox" value="1" /> Mon</label>
+              <label><input type="checkbox" value="2" /> Tue</label>
+              <label><input type="checkbox" value="3" /> Wed</label>
+              <label><input type="checkbox" value="4" /> Thu</label>
+              <label><input type="checkbox" value="5" /> Fri</label>
+              <label><input type="checkbox" value="6" /> Sat</label>
+            </div>
+          </div>
+
+          <div class="form-row times-row">
+            <label class="field-label" for="choreTimes">Times per day</label>
+            <input type="number" id="choreTimes" min="1" max="10" value="1" />
+          </div>
+
+          <button type="submit" class="btn btn-primary">Add chore</button>
+        </form>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="chart-header">
+          <h2>Weekly Chart</h2>
+          <div class="week-nav">
+            <button id="prevWeek" class="btn btn-ghost">‹ Prev</button>
+            <span id="weekLabel" class="week-label"></span>
+            <button id="nextWeek" class="btn btn-ghost">Next ›</button>
+            <button id="todayBtn" class="btn btn-ghost">Today</button>
+          </div>
+        </div>
+        <div class="chart-scroll">
+          <table id="chartTable" class="chart-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p id="emptyState" class="empty-state" hidden>Add family members and chores to see your chart here.</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>Data stays in your browser, and syncs via your own Google account when connected.</span>
+    </footer>
+  </div>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog" id="settingsForm">
+      <h2>Google API Setup</h2>
+      <p>
+        To sync with Google Calendar &amp; keep FamDam in sync across your devices, paste an
+        <strong>OAuth Client ID</strong> from your own Google Cloud project. See the README for
+        step-by-step instructions.
+      </p>
+      <label class="field-label" for="clientIdInput">OAuth Client ID</label>
+      <input type="text" id="clientIdInput" placeholder="xxxxxxxx.apps.googleusercontent.com" />
+      <div class="dialog-actions">
+        <button type="button" id="disconnectBtn" class="btn btn-danger-ghost">Disconnect Google</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/google.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
