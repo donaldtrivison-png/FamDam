@@ -90,7 +90,7 @@
           <div class="chart-header">
             <div>
               <h2>This Week's Chart</h2>
-              <p class="panel-subtitle">Tap a star to mark a task done — and say who did it.</p>
+              <p class="panel-subtitle" id="chartSubtitle">Tap a star to mark a task done.</p>
             </div>
             <div class="week-nav">
               <button id="prevWeek" class="btn btn-ghost" aria-label="Previous week">‹ Prev</button>
@@ -99,6 +99,7 @@
               <button id="todayBtn" class="btn btn-ghost">Today</button>
             </div>
           </div>
+          <div class="board-tabs" role="tablist" id="boardTabs" aria-label="Whose board to show"></div>
           <div class="chart-scroll">
             <table id="chartTable" class="chart-table">
               <thead></thead>

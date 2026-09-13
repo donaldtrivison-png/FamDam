@@ -9,6 +9,9 @@
   const DAY_LETTERS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
   const TREND_DAYS = 14;
   const RANGE_DAYS = { week: 7, month: 30, all: null };
+  // Placeholder "owner" for chores nobody's assigned to yet, so they still
+  // show up (and score) on the combined "Everyone" board.
+  const UNASSIGNED_ID = "_unassigned";
 
   // Material-style five-point star, reused for pips, stat tiles and score rows.
   const STAR_PATH = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
@@ -21,7 +24,7 @@
   let weekStart = startOfWeek(new Date());
   let saveTimer = null;
   let reportRange = "week";
-  let activePicker = null;
+  let selectedBoard = "all"; // "all" (Everyone) or a family member's id
 
   // ---------- persistence ----------
 
@@ -35,8 +38,8 @@
   }
 
   /** Fills in defaults and migrates older data shapes so the rest of the app
-   *  can assume every chore has a createdAt and every completion records who
-   *  did it and when. */
+   *  can assume every chore has a createdAt and every completion is keyed
+   *  choreId::date::slot::memberId — one independent checkbox per assignee. */
   function normalizeState(s) {
     s.familyMembers = s.familyMembers || [];
     s.chores = s.chores || [];
@@ -50,22 +53,34 @@
     });
 
     const choreById = Object.fromEntries(s.chores.map((c) => [c.id, c]));
+    const migrated = {};
     Object.keys(s.completions).forEach((key) => {
+      const parts = key.split("::");
       const entry = s.completions[key];
-      if (entry === true) {
-        // Legacy shape: boolean-only completion, no attribution recorded.
-        const [choreId, dateIso] = key.split("::");
-        const chore = choreById[choreId];
-        const fallbackAssignee = chore && chore.assigneeIds[0];
-        s.completions[key] = {
-          done: true,
-          completedAt: `${dateIso}T00:00:00`,
-          completedBy: fallbackAssignee || null,
-        };
-      } else if (entry && typeof entry === "object" && entry.completedBy === undefined) {
-        entry.completedBy = null;
+
+      if (parts.length === 4) {
+        // Already the current per-member shape.
+        migrated[key] = entry;
+        return;
       }
+
+      // Older shapes were keyed choreId::date::slot, shared by every
+      // assignee: a bare `true`, or {done, completedAt, completedBy}.
+      const [choreId, dateIso, slot] = parts;
+      let done = true;
+      let completedAt = `${dateIso}T00:00:00`;
+      let completedBy = null;
+      if (entry && typeof entry === "object") {
+        done = !!entry.done;
+        completedAt = entry.completedAt || completedAt;
+        completedBy = entry.completedBy || null;
+      }
+      if (!done) return;
+      const chore = choreById[choreId];
+      const ownerId = completedBy || (chore && chore.assigneeIds[0]) || UNASSIGNED_ID;
+      migrated[`${choreId}::${dateIso}::${slot}::${ownerId}`] = { done: true, completedAt };
     });
+    s.completions = migrated;
 
     return s;
   }
@@ -202,85 +217,22 @@
     }
   }
 
-  // ---------- completions (who did it, and when) ----------
+  // ---------- completions ----------
+  // Each assignee gets their own independent checkbox for every occurrence:
+  // a chore shared by two people is really two separate to-dos.
 
-  function setCompletion(choreId, dateIso, slot, memberId) {
-    const key = `${choreId}::${dateIso}::${slot}`;
-    state.completions[key] = { done: true, completedAt: new Date().toISOString(), completedBy: memberId || null };
-    persist();
+  function completionKey(choreId, dateIso, slot, ownerId) {
+    return `${choreId}::${dateIso}::${slot}::${ownerId}`;
   }
 
-  function clearCompletion(choreId, dateIso, slot) {
-    const key = `${choreId}::${dateIso}::${slot}`;
-    delete state.completions[key];
-    persist();
-  }
-
-  function closeCompletionPicker() {
-    if (!activePicker) return;
-    activePicker.menu.remove();
-    document.removeEventListener("click", activePicker.onOutside, true);
-    document.removeEventListener("keydown", activePicker.onKey, true);
-    activePicker = null;
-  }
-
-  /** Opens a small "who did it?" menu anchored to the clicked pip. */
-  function openCompletionPicker(pipEl, chore, dateIso, slot, assignees) {
-    closeCompletionPicker();
-    const menu = document.createElement("div");
-    menu.className = "completion-picker";
-    menu.innerHTML =
-      `<div class="completion-picker-title">Who did it?</div>` +
-      assignees
-        .map(
-          (a) =>
-            `<button type="button" class="completion-picker-option" data-id="${a.id}">` +
-            `<span class="swatch" style="background:${a.color}"></span>${escapeHtml(a.name)}</button>`
-        )
-        .join("");
-    document.body.appendChild(menu);
-
-    const rect = pipEl.getBoundingClientRect();
-    const top = window.scrollY + rect.bottom + 6;
-    let left = window.scrollX + rect.left;
-    const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
-    left = Math.min(left, Math.max(8, maxLeft));
-    menu.style.top = `${top}px`;
-    menu.style.left = `${left}px`;
-
-    menu.querySelectorAll(".completion-picker-option").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        setCompletion(chore.id, dateIso, slot, btn.dataset.id);
-        closeCompletionPicker();
-      });
-    });
-
-    const onOutside = (e) => {
-      if (!menu.contains(e.target)) closeCompletionPicker();
-    };
-    const onKey = (e) => {
-      if (e.key === "Escape") closeCompletionPicker();
-    };
-    setTimeout(() => {
-      document.addEventListener("click", onOutside, true);
-      document.addEventListener("keydown", onKey, true);
-    }, 0);
-    activePicker = { menu, onOutside, onKey };
-  }
-
-  function handlePipClick(pipEl, chore, dateIso, slot) {
-    const key = `${chore.id}::${dateIso}::${slot}`;
-    const entry = state.completions[key];
-    if (entry && entry.done) {
-      clearCompletion(chore.id, dateIso, slot);
-      return;
-    }
-    const assignees = state.familyMembers.filter((m) => chore.assigneeIds.includes(m.id));
-    if (assignees.length > 1) {
-      openCompletionPicker(pipEl, chore, dateIso, slot, assignees);
+  function toggleCompletion(choreId, dateIso, slot, ownerId) {
+    const key = completionKey(choreId, dateIso, slot, ownerId);
+    if (state.completions[key] && state.completions[key].done) {
+      delete state.completions[key];
     } else {
-      setCompletion(chore.id, dateIso, slot, assignees[0] ? assignees[0].id : null);
+      state.completions[key] = { done: true, completedAt: new Date().toISOString() };
     }
+    persist();
   }
 
   async function syncOneChore(chore) {
@@ -318,6 +270,7 @@
     const results = [];
 
     state.chores.forEach((chore) => {
+      const owners = chore.assigneeIds.length ? chore.assigneeIds : [UNASSIGNED_ID];
       const createdAt = new Date(`${chore.createdAt}T00:00:00`);
       let cursor = rangeStart && rangeStart > createdAt ? new Date(rangeStart) : createdAt;
       cursor.setHours(0, 0, 0, 0);
@@ -327,17 +280,16 @@
         if (choreRunsOn(chore, cursor.getDay())) {
           const times = Math.max(1, chore.schedule.timesPerDay || 1);
           for (let slot = 0; slot < times; slot++) {
-            const key = `${chore.id}::${dateIso}::${slot}`;
-            const entry = state.completions[key];
-            let status;
-            let completedBy = null;
-            if (entry && entry.done) {
-              completedBy = entry.completedBy || null;
-              status = (entry.completedAt || "").slice(0, 10) > dateIso ? "late" : "onTime";
-            } else {
-              status = dateIso < todayIso ? "missed" : "pending";
-            }
-            results.push({ choreId: chore.id, assigneeIds: chore.assigneeIds, date: dateIso, status, completedBy });
+            owners.forEach((ownerId) => {
+              const entry = state.completions[completionKey(chore.id, dateIso, slot, ownerId)];
+              let status;
+              if (entry && entry.done) {
+                status = (entry.completedAt || "").slice(0, 10) > dateIso ? "late" : "onTime";
+              } else {
+                status = dateIso < todayIso ? "missed" : "pending";
+              }
+              results.push({ choreId: chore.id, memberId: ownerId, date: dateIso, status });
+            });
           }
         }
         cursor = addDays(cursor, 1);
@@ -431,6 +383,64 @@
     });
   }
 
+  /** Renders one owner's row of star pips for a chore on a given day. */
+  function renderPips(chore, dateIso, ownerId, todayIso, ownerMember) {
+    const times = Math.max(1, chore.schedule.timesPerDay || 1);
+    return Array.from({ length: times }, (_, slot) => {
+      const entry = state.completions[completionKey(chore.id, dateIso, slot, ownerId)];
+      const done = !!(entry && entry.done);
+      let cls = "pip";
+      let style = "";
+      let title;
+      if (done) {
+        cls += " pip-done";
+        const late = (entry.completedAt || "").slice(0, 10) > dateIso;
+        style = ownerMember ? ` style="--pip-color:${ownerMember.color}"` : "";
+        title = `Done${late ? " (logged late)" : ""}`;
+      } else if (dateIso < todayIso) {
+        cls += " pip-missed";
+        title = "Missed — tap to log it late";
+      } else {
+        title = times > 1 ? `Mark ${slot + 1}/${times} done` : "Mark done";
+      }
+      return (
+        `<button type="button" class="${cls}"${style} data-chore="${chore.id}" data-date="${dateIso}" ` +
+        `data-slot="${slot}" data-owner="${ownerId}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${starIcon(done)}</button>`
+      );
+    }).join("");
+  }
+
+  function renderBoardTabs() {
+    // Selecting a deleted member falls back to the combined board.
+    if (selectedBoard !== "all" && !state.familyMembers.some((m) => m.id === selectedBoard)) {
+      selectedBoard = "all";
+    }
+    const wrap = document.getElementById("boardTabs");
+    const tabs = [{ id: "all", name: "Everyone", color: null }, ...state.familyMembers];
+    wrap.innerHTML = tabs
+      .map(
+        (t) =>
+          `<button type="button" class="board-tab ${selectedBoard === t.id ? "is-active" : ""}" data-board="${t.id}" role="tab" aria-selected="${selectedBoard === t.id}">` +
+          `${t.color ? `<span class="avatar-dot" style="background:${t.color}"></span>` : ""}${escapeHtml(t.name)}</button>`
+      )
+      .join("");
+    wrap.querySelectorAll(".board-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedBoard = btn.dataset.board;
+        renderBoardTabs();
+        renderChart();
+      });
+    });
+
+    const subtitle = document.getElementById("chartSubtitle");
+    if (selectedBoard === "all") {
+      subtitle.textContent = "Tap a star to mark a task done.";
+    } else {
+      const member = state.familyMembers.find((m) => m.id === selectedBoard);
+      subtitle.textContent = member ? `${member.name}'s own board — tap a star to mark a task done.` : "";
+    }
+  }
+
   function renderChart() {
     const thead = document.querySelector("#chartTable thead");
     const tbody = document.querySelector("#chartTable tbody");
@@ -447,6 +457,20 @@
     if (!state.familyMembers.length || !state.chores.length) {
       table.hidden = true;
       emptyState.hidden = false;
+      emptyState.textContent = "Add family members and chores to see your chart here.";
+      return;
+    }
+
+    const visibleChores =
+      selectedBoard === "all" ? state.chores : state.chores.filter((c) => c.assigneeIds.includes(selectedBoard));
+
+    if (!visibleChores.length) {
+      table.hidden = true;
+      emptyState.hidden = false;
+      const member = state.familyMembers.find((m) => m.id === selectedBoard);
+      emptyState.textContent = member
+        ? `${member.name} doesn't have any chores yet — assign one from the sidebar.`
+        : "Add family members and chores to see your chart here.";
       return;
     }
     table.hidden = false;
@@ -460,12 +484,16 @@
       "</tr>";
 
     tbody.innerHTML = "";
-    const pipHandlers = [];
 
-    state.chores.forEach((chore) => {
+    visibleChores.forEach((chore) => {
       const tr = document.createElement("tr");
       let cells = `<td class="chore-name-cell">${escapeHtml(chore.title)}</td>`;
-      const assignees = state.familyMembers.filter((m) => chore.assigneeIds.includes(m.id));
+      const owners =
+        selectedBoard === "all"
+          ? chore.assigneeIds.length
+            ? chore.assigneeIds
+            : [UNASSIGNED_ID]
+          : [selectedBoard];
 
       weekDates.forEach((d) => {
         const dayIndex = d.getDay();
@@ -474,35 +502,20 @@
           return;
         }
         const dateIso = isoDate(d);
-        const times = Math.max(1, chore.schedule.timesPerDay || 1);
-        const pips = Array.from({ length: times }, (_, slot) => {
-          const key = `${chore.id}::${dateIso}::${slot}`;
-          const entry = state.completions[key];
-          const done = !!(entry && entry.done);
-          let cls = "pip";
-          let style = "";
-          let title;
-          if (done) {
-            cls += " pip-done";
-            const doer = state.familyMembers.find((m) => m.id === entry.completedBy);
-            const late = (entry.completedAt || "").slice(0, 10) > dateIso;
-            style = doer ? ` style="--pip-color:${doer.color}"` : "";
-            title = doer ? `Done by ${doer.name}${late ? " (logged late)" : ""}` : `Done${late ? " (logged late)" : ""}`;
-          } else if (dateIso < todayIso) {
-            cls += " pip-missed";
-            title = "Missed — tap to log it late";
-          } else {
-            title = times > 1 ? `Mark ${slot + 1}/${times} done` : "Mark done";
-          }
-          pipHandlers.push({ choreId: chore.id, dateIso, slot });
-          return `<button type="button" class="${cls}"${style} data-chore="${chore.id}" data-date="${dateIso}" data-slot="${slot}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${starIcon(done)}</button>`;
-        }).join("");
-        const assigneeLine = assignees.length
-          ? `<span class="assignee-line">${assignees
-              .map((a) => `<span class="avatar-dot" style="background:${a.color}" title="${escapeHtml(a.name)}"></span>`)
-              .join("")}</span>`
-          : `<span class="chore-meta">Unassigned</span>`;
-        cells += `<td class="${isSameDay(d, today) ? "today-col" : ""}">${assigneeLine}<div class="slot-pips">${pips}</div></td>`;
+        const rows = owners
+          .map((ownerId) => {
+            const member = state.familyMembers.find((m) => m.id === ownerId);
+            const pips = renderPips(chore, dateIso, ownerId, todayIso, member);
+            const dot =
+              selectedBoard === "all"
+                ? member
+                  ? `<span class="avatar-dot" style="background:${member.color}" title="${escapeHtml(member.name)}"></span>`
+                  : `<span class="chore-meta">—</span>`
+                : "";
+            return `<div class="owner-row">${dot}<div class="slot-pips">${pips}</div></div>`;
+          })
+          .join("");
+        cells += `<td class="${isSameDay(d, today) ? "today-col" : ""}">${rows}</td>`;
       });
       tr.innerHTML = cells;
       tbody.appendChild(tr);
@@ -510,8 +523,7 @@
 
     tbody.querySelectorAll(".pip").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const chore = state.chores.find((c) => c.id === btn.dataset.chore);
-        if (chore) handlePipClick(btn, chore, btn.dataset.date, Number(btn.dataset.slot));
+        toggleCompletion(btn.dataset.chore, btn.dataset.date, Number(btn.dataset.slot), btn.dataset.owner);
       });
     });
   }
@@ -622,9 +634,7 @@
       memberList.innerHTML = '<li class="chore-meta">Add family members to see individual scores.</li>';
     }
     state.familyMembers.forEach((m) => {
-      const mine = occ.filter(
-        (o) => (o.assigneeIds.includes(m.id) && o.status === "missed") || o.completedBy === m.id
-      );
+      const mine = occ.filter((o) => o.memberId === m.id);
       const s = summarize(mine);
       memberList.appendChild(renderMemberScoreRow(m, s));
     });
@@ -641,6 +651,7 @@
   function render() {
     renderMembers();
     renderChores();
+    renderBoardTabs();
     renderChart();
     renderReport();
   }

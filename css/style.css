@@ -300,7 +300,6 @@ input[type="color"] {
 .chore-name-cell { font-weight: 700; min-width: 150px; }
 
 .day-cell-empty { color: var(--border-strong); text-align: center; }
-.assignee-line { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .avatar-dot {
   width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--surface);
@@ -330,29 +329,23 @@ input[type="color"] {
 
 .foot { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 24px 0 8px; }
 
-/* ---------- Completion picker (choose who did it) ---------- */
+/* ---------- Board tabs (each family member's own board) ---------- */
 
-.completion-picker {
-  position: absolute;
-  z-index: 50;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lift);
-  padding: 8px;
-  min-width: 160px;
-  font-family: var(--font-body);
+.board-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.board-tab {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink);
+  padding: 7px 14px; border-radius: 999px;
+  font-family: var(--font-body); font-size: 0.85rem; font-weight: 700; cursor: pointer;
 }
-.completion-picker-title {
-  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--muted); padding: 4px 8px 6px;
-}
-.completion-picker-option {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  border: none; background: transparent; padding: 8px; border-radius: 8px;
-  cursor: pointer; font-size: 0.88rem; font-weight: 600; color: var(--ink); text-align: left;
-}
-.completion-picker-option:hover { background: var(--accent-soft); }
+.board-tab .avatar-dot { box-shadow: none; }
+.board-tab.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.board-tab.is-active .avatar-dot { box-shadow: 0 0 0 2px #fff; }
+.board-tab:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+
+/* On the combined "Everyone" board, each assignee gets their own labeled row of pips */
+.owner-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.owner-row:last-child { margin-bottom: 0; }
 
 /* ---------- Scorecard / report ---------- */
 
